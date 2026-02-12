@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Spin → Reveal → Break</title>
+
+<style>
+:root { --bg:#0b0f17; --fg:#e8eefc; }
+
+html, body {
+  height:100%;
+  margin:0;
+  background: radial-gradient(1400px 900px at 50% 35%, #142042 0%, var(--bg) 55%, #05070c 100%);
+  color:var(--fg);
+  font-family:system-ui;
+}
+
+/* center vertically */
+.wrap {
+  height:100%;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:28px;
+}
+
+/* image container */
+.stage {
+  width:min(720px, 92vw);
+  aspect-ratio:1/1;
+  display:grid;
+  place-items:center;
+  border-radius:28px;
+  background: rgba(255,255,255,0.05);
+  box-shadow:0 25px 90px rgba(0,0,0,0.7);
+  overflow:hidden;
+  position:relative;
+}
+
+/* large image */
+#spinner {
+  width:62%;
+  height:62%;
+  object-fit:contain;
+  transform-origin:center;
+  cursor:pointer;
+  user-select:none;
+
+  /* nearly black idle */
+  filter: brightness(0.015) contrast(1.2) grayscale(1);
+}
+
+/* spinning look */
+#spinner.active {
+  filter:
+    drop-shadow(20px 0 10px rgba(90,150,255,0.18))
+    drop-shadow(-20px 0 10px rgba(90,150,255,0.18))
+    brightness(1.1)
+    saturate(1.2);
+}
+
+/* visible after safe stop */
+#spinner.revealed {
+  filter: brightness(1);
+}
+
+/* zoom animation */
+#spinner.zooming {
+  animation: slowZoom 2.6s ease-out forwards;
+}
+
+@keyframes slowZoom {
+  from { transform: scale(1) rotate(0); }
+  to   { transform: scale(1.25) rotate(0); }
+}
+
+/* message BELOW image */
+.message {
+  text-align:center;
+  font-size:22px;
+  padding:16px 22px;
+  border-radius:18px;
+  background:rgba(0,0,0,0.45);
+  border:1px solid rgba(255,255,255,0.25);
+  backdrop-filter: blur(8px);
+}
+
+.sub {
+  margin-top:6px;
+  font-size:15px;
+  opacity:0.9;
+}
+
+canvas {
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+}
+</style>
+</head>
+
+<body>
+
+<div class="wrap">
+
+<div class="stage" id="stage">
+  <img id="spinner" src="valentine.png" alt="image failed">
+  <canvas id="fx"></canvas>
+</div>
+
+<div class="message">
+  <div id="promptMain">Click here to spin!</div>
+  <div id="promptSub" class="sub">Then click the image to stop</div>
+</div>
+
+</div>
+
+<script>
+const spinner=document.getElementById('spinner');
+const stage=document.getElementById('stage');
+const promptMain=document.getElementById('promptMain');
+const promptSub=document.getElementById('promptSub');
+const canvas=document.getElementById('fx');
+const ctx=canvas.getContext('2d');
+
+let spinning=false;
+let breaking=false;
+let angle=0;
+let spinStart=0;
+let spinRAF=null;
+let shards=[];
+
+function setPrompt(a,b=""){
+  promptMain.textContent=a;
+  promptSub.textContent=b;
+}
+
+function resizeCanvas(){
+  const r=stage.getBoundingClientRect();
+  canvas.width=r.width;
+  canvas.height=r.height;
+}
+window.addEventListener("resize",resizeCanvas);
+resizeCanvas();
+
+/* SPIN */
+function startSpin(){
+  if(spinning||breaking) return;
+  spinning=true;
+
+  spinner.classList.remove("zooming","revealed");
+  spinner.classList.add("active");
+
+  setPrompt("Spinning…","Click to stop (safe 30s)");
+
+  spinStart=performance.now();
+  let last=spinStart;
+
+  function frame(t){
+    if(!spinning) return;
+    const dt=(t-last)/1000;
+    last=t;
+    angle+=40*dt;
+    spinner.style.transform=`rotate(${angle}rad)`;
+    spinRAF=requestAnimationFrame(frame);
+  }
+  spinRAF=requestAnimationFrame(frame);
+}
+
+/* SAFE STOP → reveal + zoom */
+function stopSpinReveal(){
+  spinning=false;
+  cancelAnimationFrame(spinRAF);
+
+  spinner.style.transform="rotate(0)";
+  spinner.classList.remove("active");
+  spinner.classList.add("revealed","zooming");
+
+  setPrompt("🐝","Click again to spin");
+}
+
+/* SHATTER */
+function rand(a,b){return a+Math.random()*(b-a)}
+
+function makeShards(){
+  const r=stage.getBoundingClientRect();
+  const w=r.width*0.88;
+  const h=r.height*0.88;
+  const x=(r.width-w)/2;
+  const y=(r.height-h)/2;
+
+  const off=document.createElement("canvas");
+  off.width=r.width;
+  off.height=r.height;
+  const o=off.getContext("2d");
+  o.drawImage(spinner,x,y,w,h);
+
+  const cols=12, rows=12;
+  const tw=w/cols, th=h/rows;
+  const cx=r.width/2, cy=r.height/2;
+
+  const arr=[];
+  for(let i=0;i<cols;i++){
+    for(let j=0;j<rows;j++){
+      const sx=x+i*tw;
+      const sy=y+j*th;
+      const dx=(sx+tw/2)-cx;
+      const dy=(sy+th/2)-cy;
+      const d=Math.hypot(dx,dy)||1;
+      const speed=rand(20,100);
+      arr.push({
+        sx,sy,sw:tw,sh:th,
+        x:sx,y:sy,
+        vx:(dx/d)*speed+rand(-20,20),
+        vy:(dy/d)*speed+rand(-20,20)+rand(20,60),
+        rot:rand(-1,1),
+        vr:rand(-3,3),
+        life:1
+      });
+    }
+  }
+  return {off,arr};
+}
+
+function startBreak(){
+  spinning=false;
+  breaking=true;
+  cancelAnimationFrame(spinRAF);
+
+  spinner.classList.remove("zooming");
+
+  const data=makeShards();
+  shards=data.arr;
+  const off=data.off;
+
+  spinner.style.opacity=0;
+  setPrompt("Breaking…","");
+
+  let last=performance.now();
+
+  function frame(t){
+    const dt=(t-last)/1000;
+    last=t;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    for(const s of shards){
+      s.vy+=200*dt;
+      s.x+=s.vx*dt;
+      s.y+=s.vy*dt;
+      s.rot+=s.vr*dt;
+      s.life-=dt*0.4;
+      if(s.life<=0) continue;
+
+      ctx.save();
+      ctx.globalAlpha=s.life;
+      ctx.translate(s.x+s.sw/2,s.y+s.sh/2);
+      ctx.rotate(s.rot);
+      ctx.drawImage(off,s.sx,s.sy,s.sw,s.sh,-s.sw/2,-s.sh/2,s.sw,s.sh);
+      ctx.restore();
+    }
+
+    if(shards.some(s=>s.life>0)) requestAnimationFrame(frame);
+    else location.reload();
+  }
+  requestAnimationFrame(frame);
+}
+
+/* CLICK BEHAVIOR */
+spinner.onclick=()=>{
+  if(!spinning&&!breaking) startSpin();
+  else if(spinning&&!breaking){
+    if(performance.now()-spinStart>=30000) startBreak();
+    else stopSpinReveal();
+  }
+};
+</script>
+
+</body>
+</html>
